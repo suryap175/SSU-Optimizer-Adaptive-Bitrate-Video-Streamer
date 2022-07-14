@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <link href="http://fonts.googleapis.com/css?family=Corben:bold" rel="stylesheet" type="text/css">
+  <link href="http://fonts.googleapis.com/css?family=Nobile" rel="stylesheet" type="text/css">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.5.0/css/all.css"
+    integrity="sha384-B4dIYHKNBt8Bc12p+WXckhzcICo0wtJAoU8YZTY5qE0Id1GSseTk6S+L3BlXeVIU" crossorigin="anonymous">
+  <link rel="stylesheet" href="/home.css">
+</head>
+
+<body>
+  <!--Grid container: logo, tagline and stream bar-->
+  <div class="banner">
+    <div class="row">
+      <div class="logo">
+        <img src="./logo.png" width="120px"></img>
+      </div>
+      <div class="tagline">
+        <h3><em>New way of dynamic adaptive bitrate streaming...</em></h3>
+      </div>
+    </div>
+    <div class="input-group">
+      <input type="text" class="manifestLoad" placeholder="Load Manifest Url here">
+      <button class="btn" type="submit" onclick="loadHandler()">Stream</button>
+    </div>
+  </div>
+
+  <div class="row_two">
+    <div class="main-container">
+      <div class="video-container">
+        <div class="video-player">
+
+          <video id="videoPlayer" controls width="800px" height="400"></video>
+        </div>
+
+        <div class="thumbnail">
+          <div id="video-item">
+
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="form-container">
+      <div class="icon-container">
+        <label for="myFile">
+          <i class="fas fa-file-upload" style="font-size:60px;color:rgb(250, 248, 250);"></i>
+          <p style="color: white;">upload your file here</p>
+        </label>
+      </div>
+      <!--<label for="submit"><button class="button" type="submit">Submit</button></label>-->
+      <form name="myForm" enctype="multipart/form-data" action="http://localhost:3000/upload" method="POST">
+        <input type="file" id="myFile" class="myFile" name="fileToUpload">
+        <input type="submit" id="submit_btn">
+      </form>
+      <div class="parent-metric">
+        <p id="bufferLevel"></p>
+        <p id="calculatedBitrate"></p>
+        <p id="reportedBitrate"></p>
+        <p id="framerate"></p>
+        <p id="resolution"></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js"
+    integrity="sha512-QSkVNOCYLtj73J4hbmVoOV6KVZuMluZlioC+trLpewV8qMjsWqlIQvkn1KGX2StWvPMdWGBqim1xlC8krl1EKQ=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!--<script src="/serverside/ControlBar.js" defer></script>-->
+
+  <script>
+
+    window.onload = function () {
+
+      console.log("dom loaded")
+      setupVideo();
+      fetch("http://localhost:3000/get_video_metadata")
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error('Not a valid response')
+          }
+          return res.json()
+        }).then((data) => {
+          console.log(data)
+          createThumbnailDOM(data)
+        })
+    };
+
+
+
+    // setup the video element and attach it to the Dash player
+    var my_file = document.getElementById('myFile')
+    let submit_btn = document.getElementById("submit_btn");
+    my_file.addEventListener("change", () => {
+      console.log("changed");
+      submit_btn.click();
+    }
+    )
+
+    var dash_video = document.getElementById('videoPlayer')
+    var player = dashjs.MediaPlayer().create();
+    //var dash_video = document.querySelector(".videoContainer video");
+
+    let button = document.getElementsByClassName("btn");
+    let input_url = document.getElementsByClassName('manifestLoad')[0]
+    function loadHandler() {
+      //console.log(input_url.value);
+      //check if input val is valid or not
+      setupVideo(input_url.value);
+      //console.log("input value",input_url.value);
+    }
+    let video_item = document.getElementById('video-item')
+    let video_player = document.getElementsByClassName('video-player')[0]
+
+
+    function setupVideo(url) {
+      player.initialize(dash_video, url, true);
+
+      player.updateSettings({
+        'debug': {
+          'logLevel': dashjs.Debug.LOG_LEVEL_INFO
+        }
+      });
+      player.updateSettings({
+        streaming: {
+          buffer: {
+            bufferTimeAtTopQuality: 10,
+            bufferTimeAtTopQualityLongForm: 30,
+            stableBufferTime: 10,
+            longFormContentDurationThreshold: 400,
+          }
+        }
+      });
+      if (url)
+        showMetrics(url);
+    }
+
+    var xValues=[];
+    var yValues=[];
+
+    function showMetrics(url) {
+      
+      player.initialize(dash_video, url, true);
+      player.on(dashjs.MediaPlayer.events["PLAYBACK_ENDED"], function () {
+        clearInterval(eventPoller);
+        clearInterval(bitrateCalculator);
+      });
+
+      var eventPoller = setInterval(function () {
+        var streamInfo = player.getActiveStream().getStreamInfo();
+        var dashMetrics = player.getDashMetrics();
+        var dashAdapter = player.getDashAdapter();
+
+        if (dashMetrics && streamInfo) {
+          const periodIdx = streamInfo.index;
+          var repSwitch = dashMetrics.getCurrentRepresentationSwitch('video', true);
+          var bufferLevel = dashMetrics.getCurrentBufferLevel('video', true);
+          var bitrate = repSwitch ? Math.round(dashAdapter.getBandwidthForRepresentation(repSwitch.to, periodIdx) / 1000) : NaN;
+          var adaptation = dashAdapter.getAdaptationForType(periodIdx, 'video', streamInfo);
+          var currentRep = adaptation.Representation_asArray.find(function (rep) {
+            return rep.id === repSwitch.to
+          })
+          var frameRate = currentRep.frameRate;
+          var resolution = "Resolution: " + currentRep.width + 'x' + currentRep.height;
+          document.getElementById('bufferLevel').innerText = "Buffer Level: " + bufferLevel + " secs";
+          document.getElementById('framerate').innerText = "Frame Rate: " + frameRate + " fps";
+          document.getElementById('reportedBitrate').innerText = "Reported Bitrate: " + bitrate + " Kbps";
+          document.getElementById('resolution').innerText = resolution;
+
+          xValues.push(Number(bufferLevel));
+          yValues.push(Number(calculatedBitrate));
+        }
+      }, 1000);
+
+      if (dash_video.webkitVideoDecodedByteCount !== undefined) {
+        var lastDecodedByteCount = 0;
+        const bitrateInterval = 5;
+        var bitrateCalculator = setInterval(function () {
+          var calculatedBitrate = (((dash_video.webkitVideoDecodedByteCount - lastDecodedByteCount) / 1000) * 8) / bitrateInterval;
+          document.getElementById('calculatedBitrate').innerText = "Calculated Bitrate: " + Math.round(calculatedBitrate) + " Kbps";
+          lastDecodedByteCount = dash_video.webkitVideoDecodedByteCount;
+        }, bitrateInterval * 1000);
+      } else {
+        document.getElementById('chrome-only').style.display = "none";
+      }
+
+    }
+
+  </script>
+
+</body>
+
+</html>
